@@ -3,6 +3,7 @@ from discord import app_commands
 import os
 from dotenv import load_dotenv
 import random
+from core.database import Discord, Room
 
 # Load environment variables
 load_dotenv()
@@ -22,9 +23,68 @@ class MyClient(discord.Client):
 client = MyClient()
 
 
+class RoomSelect(discord.ui.Select):
+    def __init__(self, is_guild: bool):
+        self.is_guild = is_guild
+        rooms = Room.select()
+        options = [
+            discord.SelectOption(
+                label=room.label,
+                value=room.roomId,
+            )
+            for room in rooms
+        ]
+
+        super().__init__(
+            placeholder="Choose a laundry room...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        discord_id = str(interaction.guild_id if self.is_guild else interaction.user.id)
+        try:
+            Discord.replace(discordId=discord_id, roomId=self.values[0]).execute()
+            await interaction.response.send_message(
+                f"{'Server' if self.is_guild else 'Your'} default room has been set to: `{self.values[0]}`"
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"Failed to set room: {str(e)}", ephemeral=True
+            )
+
+
+class RoomView(discord.ui.View):
+    def __init__(self, is_guild: bool):
+        super().__init__()
+        self.add_item(RoomSelect(is_guild))
+
+
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user} (ID: {client.user.id})")
+
+
+@client.tree.command(
+    name="setguildroom", description="Set the default laundry room for this server"
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def setguildroom(interaction: discord.Interaction):
+    view = RoomView(is_guild=True)
+    await interaction.response.send_message(
+        "Select a room for this server:", view=view, ephemeral=True
+    )
+
+
+@client.tree.command(
+    name="setuserroom", description="Set your personal default laundry room"
+)
+async def setuserroom(interaction: discord.Interaction):
+    view = RoomView(is_guild=False)
+    await interaction.response.send_message(
+        "Select your default room:", view=view, ephemeral=True
+    )
 
 
 @client.tree.command(name="ping", description="Check the bot's latency")
