@@ -24,30 +24,52 @@ client = MyClient()
 
 
 class RoomSelect(discord.ui.Select):
-    def __init__(self, is_guild: bool):
+    def __init__(self, is_guild: bool, page: int = 0):
         self.is_guild = is_guild
-        rooms = Room.select()
+        self.rooms = Room.select().order_by(Room.label)
+        self.page_size = 25
+        
+        # Calculate total pages properly
+        self.total_pages = max((len(self.rooms) + self.page_size - 1) // self.page_size, 1)
+        # Ensure page is within bounds
+        self.current_page = max(0, min(page, self.total_pages - 1))
+        
+        # Get rooms for current page
+        start_idx = self.current_page * self.page_size
+        end_idx = start_idx + self.page_size
+        page_rooms = self.rooms[start_idx:end_idx]
+        
+        # Create options, handle empty case
+        self.room_map = {room.roomId: room.label for room in page_rooms}
         options = [
             discord.SelectOption(
                 label=room.label,
                 value=room.roomId,
-            )
-            for room in rooms
-        ]
+            ) for room in page_rooms
+        ] or [discord.SelectOption(label="No rooms available", value="none")]
 
         super().__init__(
-            placeholder="Choose a laundry room...",
+            placeholder=f"Choose a laundry room (Page {self.current_page + 1}/{self.total_pages})...",
             min_values=1,
             max_values=1,
             options=options,
+            disabled=not page_rooms,  # Disable if no rooms
         )
 
     async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.send_message(
+                "No rooms are available to select.", ephemeral=True
+            )
+            return
+
         discord_id = str(interaction.guild_id if self.is_guild else interaction.user.id)
         try:
             Discord.replace(discordId=discord_id, roomId=self.values[0]).execute()
+            room_label = self.room_map[self.values[0]]
             await interaction.response.send_message(
-                f"{'Server' if self.is_guild else 'Your'} default room has been set to: `{self.values[0]}`"
+                f"{'Server' if self.is_guild else 'Your'} default room has been set to: `{room_label}`",
+                ephemeral=True
             )
         except Exception as e:
             await interaction.response.send_message(
@@ -57,8 +79,59 @@ class RoomSelect(discord.ui.Select):
 
 class RoomView(discord.ui.View):
     def __init__(self, is_guild: bool):
-        super().__init__()
-        self.add_item(RoomSelect(is_guild))
+        super().__init__(timeout=180)  # 3 minute timeout
+        self.is_guild = is_guild
+        self.current_page = 0
+        
+        # Initialize select menu
+        self.room_select = RoomSelect(is_guild, self.current_page)
+        self.add_item(self.room_select)
+        
+        # Add navigation buttons only if multiple pages exist
+        if self.room_select.total_pages > 1:
+            self.add_item(PaginationButton(is_next=False))
+            self.add_item(PaginationButton(is_next=True))
+
+    async def on_timeout(self):
+        # Disable all components when the view times out
+        for item in self.children:
+            item.disabled = True
+        # Try to update the message if it still exists
+        try:
+            await self.message.edit(view=self)
+        except:
+            pass
+
+
+class PaginationButton(discord.ui.Button):
+    def __init__(self, is_next: bool):
+        super().__init__(
+            style=discord.ButtonStyle.secondary,
+            label="Next ▶" if is_next else "◀ Previous",
+            custom_id="next" if is_next else "prev"
+        )
+        self.is_next = is_next
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        select_menu = view.room_select
+        
+        # Calculate new page
+        if self.is_next:
+            new_page = (view.current_page + 1) % select_menu.total_pages
+        else:
+            new_page = (view.current_page - 1) % select_menu.total_pages
+        
+        # Update view with new select menu
+        view.current_page = new_page
+        view.remove_item(select_menu)
+        view.room_select = RoomSelect(view.is_guild, new_page)
+        view.add_item(view.room_select)
+        
+        # Move the new select menu to the first position
+        view.children.insert(0, view.children.pop())
+        
+        await interaction.response.edit_message(view=view)
 
 
 @client.event
@@ -67,10 +140,11 @@ async def on_ready():
 
 
 @client.tree.command(
-    name="setguildroom", description="Set the default laundry room for this server"
+    name="set_server_room", 
+    description="Set the default laundry room for this server"
 )
 @app_commands.checks.has_permissions(administrator=True)
-async def setguildroom(interaction: discord.Interaction):
+async def set_server_room(interaction: discord.Interaction):
     view = RoomView(is_guild=True)
     await interaction.response.send_message(
         "Select a room for this server:", view=view, ephemeral=True
@@ -78,9 +152,10 @@ async def setguildroom(interaction: discord.Interaction):
 
 
 @client.tree.command(
-    name="setuserroom", description="Set your personal default laundry room"
+    name="set_user_room",
+    description="Set your personal default laundry room"
 )
-async def setuserroom(interaction: discord.Interaction):
+async def set_room(interaction: discord.Interaction):
     view = RoomView(is_guild=False)
     await interaction.response.send_message(
         "Select your default room:", view=view, ephemeral=True
