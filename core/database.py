@@ -167,6 +167,12 @@ class Machine(BaseModel):
         return False
 
 
+# Discord table definition
+class Discord(BaseModel):
+    discordId = CharField(primary_key=True)  # Discord user/guild ID
+    roomId = CharField()  # Room identifier
+
+
 # Connect to the database and create tables if they don't exist
 if not os.getenv("TESTING"):
-    db.create_tables([Location, Room, Machine], safe=True)
+    db.create_tables([Location, Room, Machine, Discord], safe=True)
