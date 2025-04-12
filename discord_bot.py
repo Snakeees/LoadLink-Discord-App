@@ -3,7 +3,7 @@ from discord import app_commands
 import os
 from dotenv import load_dotenv
 import random
-from core.database import Discord, Room
+from core.database import Discord, Room, Machine
 
 # Load environment variables
 load_dotenv()
@@ -28,24 +28,27 @@ class RoomSelect(discord.ui.Select):
         self.is_guild = is_guild
         self.rooms = Room.select().order_by(Room.label)
         self.page_size = 25
-        
+
         # Calculate total pages properly
-        self.total_pages = max((len(self.rooms) + self.page_size - 1) // self.page_size, 1)
+        self.total_pages = max(
+            (len(self.rooms) + self.page_size - 1) // self.page_size, 1
+        )
         # Ensure page is within bounds
         self.current_page = max(0, min(page, self.total_pages - 1))
-        
+
         # Get rooms for current page
         start_idx = self.current_page * self.page_size
         end_idx = start_idx + self.page_size
         page_rooms = self.rooms[start_idx:end_idx]
-        
+
         # Create options, handle empty case
         self.room_map = {room.roomId: room.label for room in page_rooms}
         options = [
             discord.SelectOption(
                 label=room.label,
                 value=room.roomId,
-            ) for room in page_rooms
+            )
+            for room in page_rooms
         ] or [discord.SelectOption(label="No rooms available", value="none")]
 
         super().__init__(
@@ -69,7 +72,7 @@ class RoomSelect(discord.ui.Select):
             room_label = self.room_map[self.values[0]]
             await interaction.response.send_message(
                 f"{'Server' if self.is_guild else 'Your'} default room has been set to: `{room_label}`",
-                ephemeral=True
+                ephemeral=True,
             )
         except Exception as e:
             await interaction.response.send_message(
@@ -82,11 +85,11 @@ class RoomView(discord.ui.View):
         super().__init__(timeout=180)  # 3 minute timeout
         self.is_guild = is_guild
         self.current_page = 0
-        
+
         # Initialize select menu
         self.room_select = RoomSelect(is_guild, self.current_page)
         self.add_item(self.room_select)
-        
+
         # Add navigation buttons only if multiple pages exist
         if self.room_select.total_pages > 1:
             self.add_item(PaginationButton(is_next=False))
@@ -108,29 +111,29 @@ class PaginationButton(discord.ui.Button):
         super().__init__(
             style=discord.ButtonStyle.secondary,
             label="Next ▶" if is_next else "◀ Previous",
-            custom_id="next" if is_next else "prev"
+            custom_id="next" if is_next else "prev",
         )
         self.is_next = is_next
 
     async def callback(self, interaction: discord.Interaction):
         view = self.view
         select_menu = view.room_select
-        
+
         # Calculate new page
         if self.is_next:
             new_page = (view.current_page + 1) % select_menu.total_pages
         else:
             new_page = (view.current_page - 1) % select_menu.total_pages
-        
+
         # Update view with new select menu
         view.current_page = new_page
         view.remove_item(select_menu)
         view.room_select = RoomSelect(view.is_guild, new_page)
         view.add_item(view.room_select)
-        
+
         # Move the new select menu to the first position
         view.children.insert(0, view.children.pop())
-        
+
         await interaction.response.edit_message(view=view)
 
 
@@ -140,8 +143,7 @@ async def on_ready():
 
 
 @client.tree.command(
-    name="set_server_room", 
-    description="Set the default laundry room for this server"
+    name="set_server_room", description="Set the default laundry room for this server"
 )
 @app_commands.checks.has_permissions(administrator=True)
 async def set_server_room(interaction: discord.Interaction):
@@ -152,8 +154,7 @@ async def set_server_room(interaction: discord.Interaction):
 
 
 @client.tree.command(
-    name="set_user_room",
-    description="Set your personal default laundry room"
+    name="set_user_room", description="Set your personal default laundry room"
 )
 async def set_room(interaction: discord.Interaction):
     view = RoomView(is_guild=False)
@@ -195,6 +196,97 @@ async def random_color(interaction: discord.Interaction):
         description=f"Hex: #{hex(color.value)[2:].zfill(6)}",
         color=color,
     )
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(
+    name="machines",
+    description="Show the status of machines in your default room or a specific room",
+)
+async def machines(interaction: discord.Interaction):
+    # First try to get user's default room
+    discord_id = str(interaction.user.id)
+    user_default = Discord.get_or_none(Discord.discordId == discord_id)
+
+    # Then try server default if no user default
+    if not user_default:
+        guild_id = str(interaction.guild_id) if interaction.guild else None
+        if guild_id:
+            user_default = Discord.get_or_none(Discord.discordId == guild_id)
+
+    if not user_default:
+        view = RoomView(is_guild=False)
+        await interaction.response.send_message(
+            "No default room set. Please select a room:", view=view, ephemeral=True
+        )
+        return
+
+    # Get room info and its machines
+    room = Room.get_or_none(Room.roomId == user_default.roomId)
+    if not room:
+        await interaction.response.send_message(
+            "Your default room no longer exists. Please set a new one.", ephemeral=True
+        )
+        return
+
+    machines = Machine.select().where(Machine.roomId == room.roomId)
+
+    # Create embed
+    embed = discord.Embed(title=f"Machines in {room.label}", color=discord.Color.blue())
+
+    # Group machines by type
+    washers = [m for m in machines if m.type.lower() == "washer"]
+    dryers = [m for m in machines if m.type.lower() == "dryer"]
+
+    # Check if machine counts match expected counts
+    if len(washers) != room.washerCount:
+        embed.add_field(
+            name="⚠️ Warning",
+            value=f"Washers: {len(washers)} (Expected: {room.washerCount})",
+            inline=False,
+        )
+
+    if len(dryers) != room.dryerCount:
+        embed.add_field(
+            name="⚠️ Warning",
+            value=f"Dryers: {len(dryers)} (Expected: {room.dryerCount})",
+            inline=False,
+        )
+
+    # Add washer status
+    washer_status = []
+    for w in washers:
+        status = "🟢 Available" if w.timeRemaining == 0 else "🔴 In use"
+        timestamp = int(w.lastUpdated.timestamp())
+        time_str = f" | {w.timeRemaining} min" if w.timeRemaining > 0 else ""
+        washer_status.append(
+            f"#{w.stickerNumber}: {status}{time_str} | <t:{timestamp}:R>"
+        )
+
+    if washer_status:
+        embed.add_field(
+            name=f"Washers ({len(washers)})",
+            value="\n".join(washer_status) or "No washers found",
+            inline=False,
+        )
+
+    # Add dryer status
+    dryer_status = []
+    for d in dryers:
+        status = "🟢 Available" if d.timeRemaining == 0 else "🔴 In use"
+        timestamp = int(d.lastUpdated.timestamp())
+        time_str = f" | {d.timeRemaining} min" if d.timeRemaining > 0 else ""
+        dryer_status.append(
+            f"#{d.stickerNumber}: {status}{time_str} | <t:{timestamp}:R>"
+        )
+
+    if dryer_status:
+        embed.add_field(
+            name=f"Dryers ({len(dryers)})",
+            value="\n".join(dryer_status) or "No dryers found",
+            inline=False,
+        )
+
     await interaction.response.send_message(embed=embed)
 
 
