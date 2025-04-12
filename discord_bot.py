@@ -259,8 +259,9 @@ async def machines(interaction: discord.Interaction):
         status = "🟢 Available" if w.timeRemaining == 0 else "🔴 In use"
         timestamp = int(w.lastUpdated.timestamp())
         time_str = f" | {w.timeRemaining} min" if w.timeRemaining > 0 else ""
+        user_str = f" | {w.lastUser}" if w.lastUser and w.lastUser != "Unknown" else ""
         washer_status.append(
-            f"#{w.stickerNumber}: {status}{time_str} | <t:{timestamp}:R>"
+            f"#{w.stickerNumber}: {status}{time_str}{user_str} | <t:{timestamp}:R>"
         )
 
     if washer_status:
@@ -276,8 +277,9 @@ async def machines(interaction: discord.Interaction):
         status = "🟢 Available" if d.timeRemaining == 0 else "🔴 In use"
         timestamp = int(d.lastUpdated.timestamp())
         time_str = f" | {d.timeRemaining} min" if d.timeRemaining > 0 else ""
+        user_str = f" | {d.lastUser}" if d.lastUser and d.lastUser != "Unknown" else ""
         dryer_status.append(
-            f"#{d.stickerNumber}: {status}{time_str} | <t:{timestamp}:R>"
+            f"#{d.stickerNumber}: {status}{time_str}{user_str} | <t:{timestamp}:R>"
         )
 
     if dryer_status:
@@ -288,6 +290,111 @@ async def machines(interaction: discord.Interaction):
         )
 
     await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(
+    name="machine",
+    description="Show the status of a specific machine by sticker number",
+)
+async def machine(interaction: discord.Interaction, sticker: int):
+    # Try to find the machine
+    machine = Machine.get_or_none(Machine.stickerNumber == sticker)
+
+    if not machine:
+        await interaction.response.send_message(
+            f"No machine found with sticker number #{sticker}", ephemeral=True
+        )
+        return
+
+    # Get the room info
+    room = Room.get_or_none(Room.roomId == machine.roomId)
+    if not room:
+        await interaction.response.send_message(
+            "Error: Machine's room no longer exists.", ephemeral=True
+        )
+        return
+
+    # Create embed
+    embed = discord.Embed(
+        title=f"Machine #{sticker} Status",
+        description=f"Location: {room.label}",
+        color=discord.Color.blue(),
+    )
+
+    # Add machine details
+    status = "🟢 Available" if machine.timeRemaining == 0 else "🔴 In use"
+    timestamp = int(machine.lastUpdated.timestamp())
+    time_str = f" | {machine.timeRemaining} min" if machine.timeRemaining > 0 else ""
+    user_str = (
+        f" | {machine.lastUser}"
+        if machine.lastUser and machine.lastUser != "Unknown"
+        else ""
+    )
+
+    embed.add_field(name="Type", value=machine.type.capitalize(), inline=True)
+
+    embed.add_field(name="Status", value=f"{status}{time_str}{user_str}", inline=True)
+
+    embed.add_field(name="Last Updated", value=f"<t:{timestamp}:R>", inline=True)
+
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(name="claim", description="Claim a machine by its sticker number")
+async def claim(interaction: discord.Interaction, sticker: int):
+    # Try to find the machine
+    machine = Machine.get_or_none(Machine.stickerNumber == sticker)
+
+    if not machine:
+        await interaction.response.send_message(
+            f"No machine found with sticker number #{sticker}", ephemeral=True
+        )
+        return
+
+    # Get the room info
+    room = Room.get_or_none(Room.roomId == machine.roomId)
+    if not room:
+        await interaction.response.send_message(
+            "Error: Machine's room no longer exists.", ephemeral=True
+        )
+        return
+
+    # Format the Discord mention
+    discord_mention = f"<@{interaction.user.id}>"
+
+    try:
+        # Update the machine's lastUser field
+        Machine.update(
+            lastUser=discord_mention,
+        ).where(Machine.stickerNumber == sticker).execute()
+
+        # Create response embed
+        embed = discord.Embed(
+            title=f"Machine #{sticker} Claimed",
+            description=f"Location: {room.label}",
+            color=discord.Color.green(),
+        )
+
+        embed.add_field(name="Type", value=machine.type.capitalize(), inline=True)
+
+        embed.add_field(name="Claimed By", value=discord_mention, inline=True)
+
+        embed.add_field(
+            name="Time Remaining",
+            value=(
+                f"{machine.timeRemaining} minutes"
+                if machine.timeRemaining > 0
+                else "Available"
+            ),
+            inline=True,
+        )
+
+        await interaction.response.send_message(embed=embed)
+
+    except Exception as e:
+        await interaction.response.send_message(
+            f"Failed to claim machine: {str(e)}", ephemeral=True
+        )
 
 
 client.run(os.getenv("DISCORD_TOKEN"))
