@@ -11,6 +11,7 @@ from peewee import (
     DateTimeField,
     ForeignKeyField,
 )
+import pymysql
 from typing import Dict, Any
 
 # Load environment variables from .env file
@@ -19,8 +20,18 @@ load_dotenv()
 
 class AutoConnectingMySQLDatabase(MySQLDatabase):
     def execute_sql(self, sql, params=None, commit=True):
-        # Always ensure connection is active before executing SQL
-        self.connect()
+        # Ensure a connection is open
+        self.connect(reuse_if_open=True)
+
+        # Try pinging the connection to ensure it's still alive
+        conn = self._state.conn  # Safe to use, even if "protected"
+        if conn:
+            try:
+                conn.ping(reconnect=True)
+            except pymysql.err.InterfaceError:
+                self.close()
+                self.connect()
+
         return super().execute_sql(sql, params, commit)
 
 
