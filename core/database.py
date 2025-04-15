@@ -20,7 +20,7 @@ load_dotenv()
 class AutoConnectingMySQLDatabase(MySQLDatabase):
     def execute_sql(self, sql, params=None, commit=True):
         # Always ensure connection is active before executing SQL
-        self.connect(reuse_if_open=True)
+        self.connect()
         return super().execute_sql(sql, params, commit)
 
 
@@ -38,6 +38,9 @@ else:
         password=os.getenv("MYSQL_PASSWORD"),
         host=os.getenv("MYSQL_HOST"),
         port=int(os.getenv("MYSQL_PORT")),
+        connect_timeout=28800,
+        read_timeout=28800,
+        write_timeout=28800,
     )
     # Connect only if not in testing mode
     db.connect()
@@ -147,25 +150,6 @@ class Machine(BaseModel):
         if query.get("timeRemaining", 0) < 0:
             raise ValueError("timeRemaining cannot be negative")
         return super().create(**query)
-
-    @classmethod
-    def claim(cls, data: Dict[str, Any]) -> bool:
-        opaque_id = data.get("opaqueId")
-        existing = cls.get_or_none(cls.opaqueId == opaque_id)
-
-        if existing is None:
-            data["lastUpdated"] = datetime.datetime.now()
-            data["lastUser"] = "Unknown"
-            cls.create(**data)
-            return True
-        elif data["timeRemaining"] != existing.timeRemaining:
-            data["lastUpdated"] = datetime.datetime.now()
-            if data["timeRemaining"] - existing.timeRemaining > 5:
-                data["lastUser"] = "Unknown"
-            cls.update(**data).where(cls.opaqueId == opaque_id).execute()
-            return True
-        return False
-
 
 # Discord table definition
 class Discord(BaseModel):
